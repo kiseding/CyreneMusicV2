@@ -21,6 +21,9 @@ import 'onboarding_steps.dart';
 /// 协议文本、登录校验、音源增删、样式切换逻辑各自只有一份，引导页与设置页
 /// 不会随时间分叉。
 ///
+/// 登录步不强留人：底部除了「注册 / 登录」互切，还给一条「跳过登录」退路
+/// （回调 [onSkipLogin]），点了就以游客身份继续后面的音源与样式步骤。
+///
 /// 当前停在哪一步由外部（[AppGate]）根据真实状态算好后传进来，本页不自持
 /// 进度：用户在第 3 步退出登录、或登录态过期，外部会立即把 [step] 切回登录
 /// 步，无需本页参与。
@@ -30,6 +33,7 @@ class OnboardingPage extends StatefulWidget {
     required this.step,
     required this.account,
     required this.audioSources,
+    required this.onSkipLogin,
     required this.onAudioSourceDone,
     required this.onCompleted,
   });
@@ -37,6 +41,9 @@ class OnboardingPage extends StatefulWidget {
   final OnboardingStep step;
   final AccountSessionController account;
   final AudioSourcePreferencesController audioSources;
+
+  /// 登录步选择「跳过登录，直接开始使用」时回调，由外部落「游客模式」标记。
+  final VoidCallback onSkipLogin;
 
   /// 越过音源配置步（第三步 → 第四步）时回调，由外部落「音源步已完成」标记。
   final VoidCallback onAudioSourceDone;
@@ -51,8 +58,8 @@ class OnboardingPage extends StatefulWidget {
 class _OnboardingPageState extends State<OnboardingPage> {
   final _agreementScrollController = ScrollController();
 
-  /// 登录/注册表单的句柄：登录步是硬门槛（不支持跳过），底部操作条用它在
-  /// 「注册新账号 / 已有账号直接登录」之间联动。
+  /// 登录/注册表单的句柄：底部操作条用它在「注册新账号 / 已有账号直接登录」
+  /// 之间联动，与「跳过登录」并排显示。
   final _loginViewKey = GlobalKey<LoginViewState>();
 
   /// 表单尚未挂载（首帧）时 [ValueListenableBuilder] 的兜底监听源；挂载后
@@ -238,20 +245,27 @@ class _OnboardingPageState extends State<OnboardingPage> {
       enabled: _agreementReadToEnd,
       onPressed: OnboardingStore.instance.acceptTerms,
     ),
-    // 登录步骤：登录是硬门槛，底部不留「暂不登录」退路。提交按钮在表单内
-    // （[LoginView] 自带），底栏用小按钮在两模式间互切注册/登录，随表单当前
-    // 模式联动文案与动作。
+    // 登录步骤：提交按钮在表单内（[LoginView] 自带），底栏放两个文字按钮——
+    // 上面一个在注册/登录两模式间互切，下面一个是「跳过登录」退路。想先听歌、
+    // 不愿注册的用户不该被卡死在这一步。
     OnboardingStep.login => ValueListenableBuilder<bool>(
       valueListenable:
           _loginViewKey.currentState?.registerMode ?? _registerModeFallback,
-      builder: (context, registering, _) => Align(
-        alignment: Alignment.center,
-        child: MiuixTextButton(
-          registering ? '已有账号？直接登录' : '没有账号？注册新账号',
-          onPressed: () => registering
-              ? _loginViewKey.currentState?.switchToLogin()
-              : _loginViewKey.currentState?.switchToRegister(),
-        ),
+      builder: (context, registering, _) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MiuixTextButton(
+            registering ? '已有账号？直接登录' : '没有账号？注册新账号',
+            onPressed: () => registering
+                ? _loginViewKey.currentState?.switchToLogin()
+                : _loginViewKey.currentState?.switchToRegister(),
+          ),
+          MiuixTextButton(
+            '跳过登录，直接开始使用',
+            key: const Key('onboarding-skip-login'),
+            onPressed: _skipLogin,
+          ),
+        ],
       ),
     ),
     // 音源步骤：启用一个音源后「下一步」进入样式设置；也可跳过（一样进下一步，
@@ -279,6 +293,21 @@ class _OnboardingPageState extends State<OnboardingPage> {
       onPressed: widget.onCompleted,
     ),
   };
+
+  /// 跳过登录：先跟用户把代价说清楚，再落游客标记。
+  ///
+  /// 游客能正常搜索、播放、配置音源，只是云端歌单同步、评论、一起听、会员
+  /// 权益这些要账号的功能用不了；之后随时能在「我的」里登录，登录后自动接上
+  /// 账号数据。
+  Future<void> _skipLogin() async {
+    final confirmed = await _confirmSkip(
+      title: '跳过登录？',
+      summary:
+          '不登录也能搜索和播放，但歌单同步、评论、一起听与会员权益会不可用。'
+          '你可以随时在「我的」页面登录。',
+    );
+    if (confirmed == true) widget.onSkipLogin();
+  }
 
   Future<void> _skipAudioSource() async {
     final confirmed = await _confirmSkip(

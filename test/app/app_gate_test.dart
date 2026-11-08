@@ -2,7 +2,8 @@
 ///
 /// [resolveOnboardingStep] 是整个引导流程的大脑：它决定用户看到哪一步、
 /// 什么时候放行进主界面。这里守住需求里的每条规则，尤其是「用户手动退出
-/// 账号后跳回第一步登录」——那条在引导已完成之后依然必须生效。
+/// 账号后跳回第一步登录」——那条在引导已完成之后依然必须生效；唯一例外是
+/// 用户自己选了「跳过登录」（guestMode），见文件末尾那一组。
 library;
 
 import 'package:cyrene_music_reborn/app/app_gate.dart';
@@ -14,12 +15,14 @@ OnboardingStep? resolve({
   bool termsAccepted = false,
   bool onboardingCompleted = false,
   bool isLoggedIn = false,
+  bool guestMode = false,
   bool audioSourceDone = false,
   bool styleSettingsDone = false,
 }) => resolveOnboardingStep(
   termsAccepted: termsAccepted,
   onboardingCompleted: onboardingCompleted,
   isLoggedIn: isLoggedIn,
+  guestMode: guestMode,
   audioSourceDone: audioSourceDone,
   styleSettingsDone: styleSettingsDone,
 );
@@ -104,6 +107,46 @@ void main() {
       // 对老用户都是 false——不能被重新要求走一遍。
       expect(
         resolve(termsAccepted: true, onboardingCompleted: true, isLoggedIn: true),
+        isNull,
+      );
+    });
+  });
+
+  group('跳过登录（游客模式）', () {
+    test('同意协议后选了跳过登录 → 不再停在登录步，直接进音源步', () {
+      expect(
+        resolve(termsAccepted: true, guestMode: true),
+        OnboardingStep.audioSource,
+      );
+    });
+
+    test('游客走完音源与样式步 → 放行进主界面', () {
+      expect(
+        resolve(
+          termsAccepted: true,
+          guestMode: true,
+          audioSourceDone: true,
+          styleSettingsDone: true,
+        ),
+        isNull,
+      );
+    });
+
+    test('跳过登录不能绕过协议，仍停在第一步', () {
+      // terms 是唯一的硬门槛，游客模式对它无效。
+      expect(resolve(guestMode: true), OnboardingStep.terms);
+    });
+
+    test('游客设备上报过的登录态失效也不被挡回登录页', () {
+      // 曾经登录、token 过期后 expireSession 置 signedOut：开了游客模式的设备
+      // 应继续留在主界面，而不是突然弹回登录步。
+      expect(
+        resolve(
+          termsAccepted: true,
+          onboardingCompleted: true,
+          isLoggedIn: false,
+          guestMode: true,
+        ),
         isNull,
       );
     });

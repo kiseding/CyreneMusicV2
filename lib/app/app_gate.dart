@@ -23,8 +23,9 @@ import 'music_app_shell.dart';
 /// 中途被杀进程、登录态过期、事后主动退出登录，都会自动回到正确的一步，
 /// 不会出现「进度记着第 3 步、实际却已登出」的错位。
 ///
-/// 这也直接满足了「用户手动退出账号后跳回第二步登录」——[AccountSessionController]
-/// 的 logout 会把状态置为 signedOut 并通知，本 gate 重算后落到 [OnboardingStep.login]。
+/// 登录默认是硬门槛：用户手动退出账号后会被挡回第二步登录页。若用户在登录步
+/// 主动选了「跳过登录」（[OnboardingStore.guestMode]），登录不再是门槛——游客
+/// 也能一路走到主界面，只是云端歌单、评论、一起听等需要账号的功能不可用。
 class AppGate extends StatefulWidget {
   const AppGate({
     super.key,
@@ -72,6 +73,7 @@ class _AppGateState extends State<AppGate> {
         termsAccepted: onboarding.termsAccepted,
         onboardingCompleted: onboarding.completed,
         isLoggedIn: account.isLoggedIn,
+        guestMode: onboarding.guestMode,
         audioSourceDone: onboarding.audioSourceDone,
         styleSettingsDone: onboarding.styleSettingsDone,
       );
@@ -92,6 +94,8 @@ class _AppGateState extends State<AppGate> {
         step: step,
         account: widget.account,
         audioSources: widget.audioSources,
+        // 登录步选「跳过登录」：落盘游客标记后重算，登录不再是门槛，直接进音源步。
+        onSkipLogin: () => OnboardingStore.instance.setGuestMode(true),
         onAudioSourceDone: () => OnboardingStore.instance.setAudioSourceDone(true),
         onCompleted: OnboardingStore.instance.complete,
       );
@@ -102,11 +106,15 @@ class _AppGateState extends State<AppGate> {
 /// 由真实状态推导当前应停在哪一步；返回 null 表示引导已走完，进主界面。
 ///
 /// 纯函数，便于单测覆盖各种组合。规则：
-/// 1. 协议未同意 → 第一步。这是硬门槛，任何时候都最优先。
-/// 2. 未登录 → 第二步。**登录是硬门槛**，引导完成后依然生效，所以用户事后
-///    手动退出登录会跳回登录页，正是需求要的行为。
+/// 1. 协议未同意 → 第一步。这是硬门槛，任何时候都最优先，游客模式也不例外。
+/// 2. 未登录且未选过「跳过登录」→ 第二步。登录默认是硬门槛，引导完成后依然
+///    生效，所以用户事后手动退出登录会跳回登录页。
 /// 3. 未越过音源步 → 第三步。越过（启用音源或跳过）即进第四步样式设置。
 /// 4. 未完成样式步 → 第四步。完成即整体走完引导。
+///
+/// [guestMode] 是设备级的「跳过登录」标记（见 [OnboardingStore.guestMode]）：
+/// 置位后规则 2 不再拦人，游客可以一路进主界面；引导已完成的设备事后退出账号，
+/// 也回到主界面而不是被登录页挡住。
 ///
 /// [onboardingCompleted] 兼容老用户：历史上已走完三步引导的，直接放行进主界面，
 /// 不会因为新增的第四步标记缺省（false）而被重新要求走一遍。
@@ -114,11 +122,12 @@ OnboardingStep? resolveOnboardingStep({
   required bool termsAccepted,
   required bool onboardingCompleted,
   required bool isLoggedIn,
+  required bool guestMode,
   required bool audioSourceDone,
   required bool styleSettingsDone,
 }) {
   if (!termsAccepted) return OnboardingStep.terms;
-  if (!isLoggedIn) return OnboardingStep.login;
+  if (!isLoggedIn && !guestMode) return OnboardingStep.login;
   if (onboardingCompleted) return null;
   if (!audioSourceDone) return OnboardingStep.audioSource;
   if (!styleSettingsDone) return OnboardingStep.styleSettings;
